@@ -124,10 +124,11 @@ class PendulumModel:
             self.theta_y, self.omega_y, a_body_x, dt)
 
         # body-y 通道（左右摆，绕 body-x）
-        # 注意：LQR body-y 通道使用 -theta_x，但动力学方程本身只关心角度大小
-        # 这里 a1 是 body-y 方向加速度，对应左右摆通道
+        # 统一约定：theta_x 左偏为正。
+        # StandaloneLqrSimulator 的单通道植物对这个通道天然使用“右偏为正”，
+        # 因此这里对输入加速度取反，把内部状态语义翻到“左偏为正”。
         self.theta_x, self.omega_x = self._step_rk4(
-            self.theta_x, self.omega_x, a_body_y, dt)
+            self.theta_x, self.omega_x, -a_body_y, dt)
 
     # ------------------------------------------------------------------
     # 张力计算
@@ -157,10 +158,10 @@ class PendulumModel:
 
         # 张力在 body frame 的分量
         # 绳索方向（从无人机指向载荷）：
-        #   dx = sin(theta_y), dy = sin(theta_x), dz = -cos(theta_mag)
+        #   dx = sin(theta_y), dy = -sin(theta_x), dz = -cos(theta_mag)
         # 张力对无人机的作用力（沿绳索指向载荷）：
         Fx = T * np.sin(self.theta_y)
-        Fy = T * np.sin(self.theta_x)
+        Fy = -T * np.sin(self.theta_x)
         Fz = -T * np.cos(theta_mag)
 
         return np.array([Fx, Fy, Fz])
@@ -370,8 +371,9 @@ class Pendulum3DModel:
             self.theta_y, self.omega_y, accel_body[0], dt)
 
         # body-y 通道（左右摆，绕 body-x）
+        # 统一约定：theta_x 左偏为正，因此这里对 body-y 加速度取反。
         self.theta_x, self.omega_x = self._step_rk4(
-            self.theta_x, self.omega_x, accel_body[1], dt)
+            self.theta_x, self.omega_x, -accel_body[1], dt)
 
         # 同步方向向量
         self._update_direction_from_angles()
@@ -403,7 +405,7 @@ class Pendulum3DModel:
         T = max(T, 0.0)
 
         Fx = T * np.sin(self.theta_y)
-        Fy = T * np.sin(self.theta_x)
+        Fy = -T * np.sin(self.theta_x)
         Fz = -T * np.cos(theta_mag)
 
         force_body = np.array([Fx, Fy, Fz])
