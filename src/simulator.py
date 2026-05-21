@@ -5,23 +5,30 @@
 import numpy as np
 from src.controller import Controller
 from src.model import ActuatorModel, RigidBodyModel
-from src.pendulum import PendulumModel
+from src.pendulum import Pendulum3DModel, PendulumModel
 from src.lqr.lqr_swing_controller import LqrSwingController
 
 
 class Simulator:
-    def __init__(self, dt=0.001, mass=120.0, inertia_diag=(67.0, 67.0, 75.0),
+    def __init__(self, dt=0.01, mass=120.0, inertia_diag=(67.0, 67.0, 75.0),
                  pendulum_L=15.0, pendulum_M=150.0,
-                 trajectory_mode='pva'):
+                 trajectory_mode='pva', pendulum_model='planar'):
         self.dt = dt
         self.mass = mass
+        self.pendulum_model = pendulum_model
         self.actuator = ActuatorModel(dt)
         hover_pwm = self.actuator.compute_hover_pwm(mass * 9.81)
         self.controller = Controller(dt, hover_throttle=hover_pwm,
                                      trajectory_mode=trajectory_mode)
         self.rigid_body = RigidBodyModel(mass, inertia_diag, dt)
-        self.pendulum = PendulumModel(L=pendulum_L, M_payload=pendulum_M,
-                                       M_drone=mass)
+        if pendulum_model == 'planar':
+            self.pendulum = PendulumModel(L=pendulum_L, M_payload=pendulum_M,
+                                          M_drone=mass)
+        elif pendulum_model == '3d':
+            self.pendulum = Pendulum3DModel(L=pendulum_L, M_payload=pendulum_M,
+                                            M_drone=mass)
+        else:
+            raise ValueError(f"unsupported pendulum_model: {pendulum_model}")
         self.lqr = LqrSwingController(dt=0.02, ropeLength=pendulum_L,
                                        payloadMass=pendulum_M, droneMass=mass)
         self.time = 0.0
@@ -61,18 +68,27 @@ class Simulator:
         thrusts, torques = self.actuator.update(pwm)
         F_body, M_body = self.actuator.get_total_wrench(thrusts, torques)
 
+        R_body_world = self.rigid_body._quat_to_rotation_matrix(self.rigid_body.q)
+
         # 4. 计算张力（用上一步的摆状态，显式耦合）
-        F_tether_body = self.pendulum.compute_tension_force()
+        if hasattr(self.pendulum, 'update_from_world'):
+            F_tether_body = self.pendulum.compute_tension_force(R_body_world)
+        else:
+            F_tether_body = self.pendulum.compute_tension_force()
 
         # 5. 刚体动力学（RK4 积分，包含张力）
         self.rigid_body.update(F_body, M_body, F_tether_body)
 
         # 6. 更新摆动力学（用无人机实际 body 加速度）
         # 从刚体获取 body 系加速度
-        R_world_body = self.rigid_body._quat_to_rotation_matrix(self.rigid_body.q).T
+        R_body_world = self.rigid_body._quat_to_rotation_matrix(self.rigid_body.q)
+        R_world_body = R_body_world.T
         accel_world = self.rigid_body._last_accel_ned
         accel_body = R_world_body @ accel_world
-        self.pendulum.update(accel_body[0], accel_body[1], self.dt)
+        if hasattr(self.pendulum, 'update_from_world'):
+            self.pendulum.update_from_world(accel_world, R_body_world, self.dt)
+        else:
+            self.pendulum.update(accel_body[0], accel_body[1], self.dt)
 
         self.time += self.dt
 
@@ -95,6 +111,8 @@ class Simulator:
         log_every = max(1, int(log_interval / self.dt))
         logs = {
             'time': [],
+            'pos_neu': [],
+            'vel_neu': [],
             'pos_ned': [],
             'vel_ned': [],
             'roll_deg': [],
@@ -114,6 +132,8 @@ class Simulator:
 
             if i % log_every == 0:
                 logs['time'].append(self.time)
+                logs['pos_neu'].append(true_state['pos_neu'].copy())
+                logs['vel_neu'].append(true_state['vel_neu'].copy())
                 logs['pos_ned'].append(true_state['pos_ned'].copy())
                 logs['vel_ned'].append(true_state['vel_ned'].copy())
                 logs['roll_deg'].append(true_state['roll_deg'])
@@ -130,7 +150,7 @@ class Simulator:
         for key in logs:
             if key == 'time':
                 logs[key] = np.array(logs[key])
-            elif key in ['pos_ned', 'vel_ned', 'pwm', 'tension_n']:
+            elif key in ['pos_neu', 'vel_neu', 'pos_ned', 'vel_ned', 'pwm', 'tension_n']:
                 logs[key] = np.array(logs[key])
             else:
                 logs[key] = np.array(logs[key])

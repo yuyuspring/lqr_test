@@ -102,7 +102,14 @@ class ActuatorModel:
 class RigidBodyModel:
     """
     6DOF 刚体动力学
-    状态：pos_ned[3], vel_ned[3], q[4] (机体->NED, q0实部), omega[3] rad/s body
+
+    规范命名：
+    - 世界系: NEU (x=north, y=east, z=up)
+    - 机体系: x=front, y=right, z=up
+    - 欧拉角对外语义: roll 向右滚为正, pitch 抬头为正, yaw 从上往下看顺时针为正
+
+    兼容性说明：
+    - 历史字段 pos_ned / vel_ned / _last_accel_ned 继续保留，实际语义等同于 NEU。
     """
 
     def __init__(self, mass, inertia_diag, dt, g=9.81):
@@ -125,24 +132,34 @@ class RigidBodyModel:
 
     def get_state(self):
         """返回完整状态字典"""
-        # 从四元数提取欧拉角（roll, pitch, yaw）单位 deg
+        # 从四元数提取内部欧拉角。
+        # 内部符号仍保持原实现：roll 左滚为正、pitch 低头为正。
         q0, q1, q2, q3 = self.q
-        roll = np.arctan2(2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 ** 2 + q2 ** 2))
-        pitch = np.arcsin(np.clip(2.0 * (q0 * q2 - q3 * q1), -1.0, 1.0))
+        roll_internal = np.arctan2(2.0 * (q0 * q1 + q2 * q3), 1.0 - 2.0 * (q1 ** 2 + q2 ** 2))
+        pitch_internal = np.arcsin(np.clip(2.0 * (q0 * q2 - q3 * q1), -1.0, 1.0))
         yaw = np.arctan2(2.0 * (q0 * q3 + q1 * q2), 1.0 - 2.0 * (q2 ** 2 + q3 ** 2))
+
+        # 对外统一为更直观的飞行语义：右滚为正、抬头为正。
+        roll = -roll_internal
+        pitch = -pitch_internal
 
         R_ned_to_body = self._quat_to_rotation_matrix(self.q).T
         accel_body = R_ned_to_body @ self._last_accel_ned if hasattr(self, '_last_accel_ned') else np.zeros(3)
         alpha = getattr(self, '_last_alpha', np.zeros(3))
 
+        position_neu = self.pos.copy()
+        velocity_neu = self.vel.copy()
+
         return {
+            'pos_neu': position_neu,
+            'vel_neu': velocity_neu,
             'pos_ned': self.pos.copy(),
             'vel_ned': self.vel.copy(),
             'roll_deg': np.rad2deg(roll),
             'pitch_deg': np.rad2deg(pitch),
             'yaw_deg': np.rad2deg(yaw),
-            'p_dps': np.rad2deg(self.omega[0]),
-            'q_dps': np.rad2deg(self.omega[1]),
+            'p_dps': np.rad2deg(-self.omega[0]),
+            'q_dps': np.rad2deg(-self.omega[1]),
             'r_dps': np.rad2deg(self.omega[2]),
             'alt_m': self.pos[2],
             'vz_up_mps': self.vel[2],

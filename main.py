@@ -10,20 +10,20 @@ import matplotlib.pyplot as plt
 
 
 def main():
-    dt = 0.001
+    dt = 0.01
     sim = Simulator(dt=dt, mass=120.0)
     sim.reset(pos=np.array([0.0, 0.0, 10.0]))
 
     # 复合指令：先悬停，再前飞，再转向
     def cmd_func(t):
         if t < 5.0:
-            return {'pos_ned': np.array([0.0, 0.0]), 'yaw': 0.0, 'alt': 10.0}
+            return {'pos_neu': np.array([0.0, 0.0]), 'yaw': 0.0, 'alt': 10.0}
         elif t < 15.0:
-            return {'pos_ned': np.array([20.0, 0.0]), 'yaw': 0.0, 'alt': 10.0}
+            return {'pos_neu': np.array([20.0, 0.0]), 'yaw': 0.0, 'alt': 10.0}
         else:
-            return {'pos_ned': np.array([20.0, 0.0]), 'yaw': 45.0, 'alt': 10.0}
+            return {'pos_neu': np.array([20.0, 0.0]), 'yaw': 45.0, 'alt': 10.0}
 
-    print("开始仿真，总时长 25s，步长 1ms ...")
+    print("开始仿真，总时长 25s，步长 10ms ...")
     logs = sim.run(cmd_func, duration=25.0, log_interval=0.01)
     print("仿真完成，绘制结果 ...")
 
@@ -31,7 +31,7 @@ def main():
 
     # 高度
     ax = axes[0, 0]
-    ax.plot(logs['time'], logs['pos_ned'][:, 2], label='altitude')
+    ax.plot(logs['time'], logs['pos_neu'][:, 2], label='altitude')
     ax.axhline(10.0, color='r', linestyle='--', label='cmd')
     ax.set_ylabel('Altitude (m)')
     ax.set_xlabel('Time (s)')
@@ -40,8 +40,8 @@ def main():
 
     # 水平位置
     ax = axes[0, 1]
-    ax.plot(logs['time'], logs['pos_ned'][:, 0], label='x')
-    ax.plot(logs['time'], logs['pos_ned'][:, 1], label='y')
+    ax.plot(logs['time'], logs['pos_neu'][:, 0], label='x')
+    ax.plot(logs['time'], logs['pos_neu'][:, 1], label='y')
     ax.axhline(20.0, color='r', linestyle='--')
     ax.set_ylabel('Horizontal Position (m)')
     ax.set_xlabel('Time (s)')
@@ -60,9 +60,9 @@ def main():
 
     # 速度
     ax = axes[1, 1]
-    ax.plot(logs['time'], logs['vel_ned'][:, 0], label='vx')
-    ax.plot(logs['time'], logs['vel_ned'][:, 1], label='vy')
-    ax.plot(logs['time'], logs['vel_ned'][:, 2], label='vz')
+    ax.plot(logs['time'], logs['vel_neu'][:, 0], label='vx')
+    ax.plot(logs['time'], logs['vel_neu'][:, 1], label='vy')
+    ax.plot(logs['time'], logs['vel_neu'][:, 2], label='vz')
     ax.set_ylabel('Velocity (m/s)')
     ax.set_xlabel('Time (s)')
     ax.legend()
@@ -79,7 +79,7 @@ def main():
 
     # 轨迹 (俯视图)
     ax = axes[2, 1]
-    ax.plot(logs['pos_ned'][:, 1], logs['pos_ned'][:, 0], 'b-', label='trajectory')
+    ax.plot(logs['pos_neu'][:, 1], logs['pos_neu'][:, 0], 'b-', label='trajectory')
     ax.scatter([0, 20], [0, 0], color='red', marker='x', s=100, label='waypoints')
     ax.set_xlabel('East (m)')
     ax.set_ylabel('North (m)')

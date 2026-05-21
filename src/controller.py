@@ -5,6 +5,10 @@
 新增：支持 PVA / VA 两种轨迹跟踪模式
 - pva: 位置→速度→加速度→姿态（原有模式）
 - va:  速度→加速度→姿态（LQR 输出 vel/acc 时使用）
+
+规范命名：
+- 世界系: NEU (x=north, y=east, z=up)
+- 历史字段 *_ned 继续兼容，实际语义等同于 NEU
 """
 import numpy as np
 
@@ -70,12 +74,12 @@ class Controller:
 
     输入指令：dict，支持两种模式
     模式 'pva' (默认):
-        cmd = {'pos_ned': np.array shape(2,), 'yaw': float deg, 'alt': float m}
+        cmd = {'pos_neu': np.array shape(2,), 'yaw': float deg, 'alt': float m}
     模式 'va':
-        cmd = {'vel_ned': np.array shape(2,), 'acc_ned': np.array shape(2,),
+        cmd = {'vel_neu': np.array shape(2,), 'acc_neu': np.array shape(2,),
                'yaw': float deg, 'alt': float m}
 
-    输入状态：dict，包含 pos_ned, vel_ned, roll[deg], pitch[deg], yaw[deg],
+    输入状态：dict，包含 pos_neu, vel_neu, roll[deg], pitch[deg], yaw[deg],
                      p[deg/s], q[deg/s], r[deg/s], alt[m], v_z_up[m/s], a_z_up[m/ss]
     输出：8 路 PWM [0, 1000]
     """
@@ -135,29 +139,41 @@ class Controller:
     def update(self, cmd, state):
         """
         cmd: dict
-            pva 模式: {'pos_ned': np.array(2,), 'yaw': float, 'alt': float}
-            va  模式: {'vel_ned': np.array(2,), 'acc_ned': np.array(2,),
+            pva 模式: {'pos_neu': np.array(2,), 'yaw': float, 'alt': float}
+            va  模式: {'vel_neu': np.array(2,), 'acc_neu': np.array(2,),
                        'yaw': float, 'alt': float}
         state: dict
         """
+        # 兼容对外语义：
+        # - 世界系使用 NEU（历史字段 *_ned 仍可用）
+        # - roll 为右滚正、pitch 为抬头正
+        # 控制律内部仍沿用原实现：roll 左滚正、pitch 低头正。
+        pos_world = state.get('pos_neu', state.get('pos_ned'))
+        vel_world = state.get('vel_neu', state.get('vel_ned'))
+        legacy_roll_deg = -state['roll_deg']
+        legacy_pitch_deg = -state['pitch_deg']
+        legacy_p_dps = -state['p_dps']
+        legacy_q_dps = -state['q_dps']
+
         # ---------- 水平通道 ----------
         if self.trajectory_mode == 'va':
             # VA 模式：直接跟踪 LQR 输出的 vel_ref + acc_ref
-            vel_ref = cmd.get('vel_ned', np.zeros(2))
-            acc_ref = cmd.get('acc_ned', np.zeros(2))
+            vel_ref = cmd.get('vel_neu', cmd.get('vel_ned', np.zeros(2)))
+            acc_ref = cmd.get('acc_neu', cmd.get('acc_ned', np.zeros(2)))
             vx_cmd = vel_ref[0]
             vy_cmd = vel_ref[1]
             # 速度环用 vel_ref 作为指令，acc_ref 作为前馈
-            vel_err = np.array([vx_cmd, vy_cmd]) - state['vel_ned'][:2]
+            vel_err = np.array([vx_cmd, vy_cmd]) - vel_world[:2]
             ax_cmd_world = self.pid_vx.update(vel_err[0]) + acc_ref[0]
             ay_cmd_world = self.pid_vy.update(vel_err[1]) + acc_ref[1]
         else:
             # PVA 模式：原有级联 PID
-            pos_err = cmd['pos_ned'] - state['pos_ned'][:2]
+            pos_cmd = cmd.get('pos_neu', cmd.get('pos_ned'))
+            pos_err = pos_cmd - pos_world[:2]
             vx_cmd = self.pid_px.update(pos_err[0])
             vy_cmd = self.pid_py.update(pos_err[1])
 
-            vel_err = np.array([vx_cmd, vy_cmd]) - state['vel_ned'][:2]
+            vel_err = np.array([vx_cmd, vy_cmd]) - vel_world[:2]
             ax_cmd_world = self.pid_vx.update(vel_err[0])
             ay_cmd_world = self.pid_vy.update(vel_err[1])
 
@@ -180,25 +196,25 @@ class Controller:
         az_err = az_cmd - state['az_up_mpss']
         thro_raw = 100.0 * self.pid_az.update(az_err)
 
-        roll_rad = np.deg2rad(state['roll_deg'])
-        pitch_rad = np.deg2rad(state['pitch_deg'])
+        roll_rad = np.deg2rad(legacy_roll_deg)
+        pitch_rad = np.deg2rad(legacy_pitch_deg)
         cos_r = np.cos(roll_rad)
         cos_p = np.cos(pitch_rad)
         tilt_comp = max(cos_r * cos_p, 0.2)
         servo_thro = self.hover_throttle + thro_raw / tilt_comp
 
         # ---------- 滚转通道 ----------
-        roll_err = roll_cmd - state['roll_deg']
+        roll_err = roll_cmd - legacy_roll_deg
         p_cmd = self.pid_roll.update(roll_err)
-        p_err = p_cmd - state['p_dps']
+        p_err = p_cmd - legacy_p_dps
         p_out = self.pid_p.update(p_err)
         p_ll = self.leadlag_p.update(p_out)
         servo_roll = self.gain_roll * p_ll
 
         # ---------- 俯仰通道 ----------
-        pitch_err = pitch_cmd - state['pitch_deg']
+        pitch_err = pitch_cmd - legacy_pitch_deg
         q_cmd = self.pid_pitch.update(pitch_err)
-        q_err = q_cmd - state['q_dps']
+        q_err = q_cmd - legacy_q_dps
         q_out = self.pid_q.update(q_err)
         q_ll = self.leadlag_q.update(q_out)
         servo_pitch = -self.gain_pitch * q_ll
